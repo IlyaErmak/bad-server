@@ -3,10 +3,25 @@ import { FilterQuery } from 'mongoose'
 import NotFoundError from '../errors/not-found-error'
 import Order from '../models/order'
 import User, { IUser } from '../models/user'
+import escapeRegExp from '../utils/escapeRegExp'
 
-// TODO: Добавить guard admin
-// eslint-disable-next-line max-len
-// Get GET /customers?page=2&limit=5&sort=totalAmount&order=desc&registrationDateFrom=2023-01-01&registrationDateTo=2023-12-31&lastOrderDateFrom=2023-01-01&lastOrderDateTo=2023-12-31&totalAmountFrom=100&totalAmountTo=1000&orderCountFrom=1&orderCountTo=10
+// Жёсткие пределы пагинации — защита от потенциальных DoS-запросов вида ?limit=1000000
+const MAX_LIMIT = 10
+const DEFAULT_LIMIT = 10
+
+const clampLimit = (raw: unknown): number => {
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return DEFAULT_LIMIT
+    return Math.min(Math.floor(n), MAX_LIMIT)
+}
+
+const clampPage = (raw: unknown): number => {
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return 1
+    return Math.floor(n)
+}
+
+// GET /customers
 export const getCustomers = async (
     req: Request,
     res: Response,
@@ -14,8 +29,6 @@ export const getCustomers = async (
 ) => {
     try {
         const {
-            page = 1,
-            limit = 10,
             sortField = 'createdAt',
             sortOrder = 'desc',
             registrationDateFrom,
@@ -28,6 +41,9 @@ export const getCustomers = async (
             orderCountTo,
             search,
         } = req.query
+
+        const page = clampPage(req.query.page)
+        const limit = clampLimit(req.query.limit)
 
         const filters: FilterQuery<Partial<IUser>> = {}
 
@@ -91,8 +107,11 @@ export const getCustomers = async (
             }
         }
 
-        if (search) {
-            const searchRegex = new RegExp(search as string, 'i')
+        if (typeof search === 'string' && search.length > 0) {
+            // Экранируем специальные символы регулярки, чтобы избежать ReDoS
+            // и просто «битых» регулярок типа `+1`. Длину обрезаем.
+            const safeSearch = escapeRegExp(search.slice(0, 100))
+            const searchRegex = new RegExp(safeSearch, 'i')
             const orders = await Order.find(
                 {
                     $or: [{ deliveryAddress: searchRegex }],
@@ -108,16 +127,16 @@ export const getCustomers = async (
             ]
         }
 
-        const sort: { [key: string]: any } = {}
+        const sort: Record<string, 1 | -1> = {}
 
-        if (sortField && sortOrder) {
-            sort[sortField as string] = sortOrder === 'desc' ? -1 : 1
+        if (typeof sortField === 'string' && typeof sortOrder === 'string') {
+            sort[sortField] = sortOrder === 'desc' ? -1 : 1
         }
 
         const options = {
             sort,
-            skip: (Number(page) - 1) * Number(limit),
-            limit: Number(limit),
+            skip: (page - 1) * limit,
+            limit,
         }
 
         const users = await User.find(filters, null, options).populate([
@@ -137,15 +156,15 @@ export const getCustomers = async (
         ])
 
         const totalUsers = await User.countDocuments(filters)
-        const totalPages = Math.ceil(totalUsers / Number(limit))
+        const totalPages = Math.ceil(totalUsers / limit)
 
         res.status(200).json({
             customers: users,
             pagination: {
                 totalUsers,
                 totalPages,
-                currentPage: Number(page),
-                pageSize: Number(limit),
+                currentPage: page,
+                pageSize: limit,
             },
         })
     } catch (error) {
@@ -153,7 +172,6 @@ export const getCustomers = async (
     }
 }
 
-// TODO: Добавить guard admin
 // Get /customers/:id
 export const getCustomerById = async (
     req: Request,
@@ -171,7 +189,6 @@ export const getCustomerById = async (
     }
 }
 
-// TODO: Добавить guard admin
 // Patch /customers/:id
 export const updateCustomer = async (
     req: Request,
@@ -179,12 +196,17 @@ export const updateCustomer = async (
     next: NextFunction
 ) => {
     try {
+        // Разрешаем менять только узкий список полей — чтобы нельзя было
+        // через payload подделать roles, tokens и т.п.
+        const allowed: Partial<IUser> = {}
+        const { name, phone } = req.body ?? {}
+        if (typeof name === 'string') allowed.name = name
+        if (typeof phone === 'string') allowed.phone = phone
+
         const updatedUser = await User.findByIdAndUpdate(
             req.params.id,
-            req.body,
-            {
-                new: true,
-            }
+            allowed,
+            { new: true, runValidators: true }
         )
             .orFail(
                 () =>
@@ -199,7 +221,6 @@ export const updateCustomer = async (
     }
 }
 
-// TODO: Добавить guard admin
 // Delete /customers/:id
 export const deleteCustomer = async (
     req: Request,

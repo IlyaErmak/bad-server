@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response, Router } from 'express'
 import NotFoundError from '../errors/not-found-error'
 
+import { csrfProtection } from '../middlewares/csrf'
 import auth from '../middlewares/auth'
 import authRouter from './auth'
 import customerRouter from './customers'
@@ -9,6 +10,10 @@ import productRouter from './product'
 import uploadRouter from './upload'
 
 const router = Router()
+
+// CSRF-проверка применяется ко всем mutating-запросам.
+// GET/HEAD/OPTIONS пропускаются мидлварой автоматически.
+router.use(csrfProtection)
 
 router.use('/auth', authRouter)
 router.use('/product', productRouter)
