@@ -29,10 +29,6 @@
 
 1. Склонировать репозиторий
 2. Запустить docker
+
 ```bash
 docker compose up -d
-```
-3. Наполнить базу данных — см. [.dump/README.md](.dump/README.md)
-4. Перейти по адресу http://localhost/ — должны быть продукты
-5. Авторизация: http://localhost/login/
-6. Админка: http://localhost/admin/
